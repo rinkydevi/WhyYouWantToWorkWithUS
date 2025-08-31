@@ -1,0 +1,163 @@
+This document is just an idea so far, it hasn't been implemented but will be after review and corrections.
+
+Alternative local plan with Ollama and MongoDB
+This plan adapts the agentic workflow for your local machine, leveraging the Ollama runtime for efficiency and MongoDB for robust, persistent data storage. It utilizes very small, quantized models to compensate for your hardware limitations. 
+Key adaptations for low-resource hardware
+Ollama for models: Ollama is highly optimized for local execution and manages quantization and GPU offloading automatically. It will prioritize your CPU due to the limited VRAM of your MX150, but it manages the process more efficiently than a custom HuggingFacePipeline.
+MongoDB for persistence: MongoDB is a flexible NoSQL database that is easy to set up locally and works well with Python. It provides a reliable and persistent alternative to the temporary FAISS in-memory vector store used in the Colab plan.
+Model selection: You will use smaller, more efficient models available on Ollama, such as Phi-3-mini, which is a good choice for both orchestrating and generating text. For image generation, you will face limitations that may require a dedicated GPU or using an external API. 
+Step 1: Set up the local environment
+Install Ollama: Follow the instructions on the Ollama website to install the application for your operating system (Windows, macOS, or Linux).
+Install MongoDB: Download and install MongoDB Community Server for your OS from the MongoDB website.
+Install Python packages: Open your terminal and install the necessary libraries.
+sh
+pip install -U langchain langchain-community langgraph pymongo
+Use code with caution.
+
+Pull the LLM: Use the Ollama CLI to download a small model. Phi-3-mini is a great option for its size and instruction-following abilities.
+sh
+ollama pull phi3:mini
+Use code with caution.
+
+ 
+Step 2: Implement MongoDB tool
+Unlike the in-memory tool in Colab, this tool will connect to your local MongoDB instance to store and retrieve personal information persistently.
+python
+from langchain_core.tools import tool
+from pymongo import MongoClient
+
+# Configure MongoDB connection
+# Ensure your local MongoDB server is running on the default port 27017
+client = MongoClient("mongodb://localhost:27017/")
+db = client['agentic_database']
+personal_info_collection = db['personal_info']
+
+@tool
+def persist_info(info: str) -> str:
+    """Persists personal information to MongoDB."""
+    document = {"info": info}
+    personal_info_collection.insert_one(document)
+    return "Personal information stored in MongoDB."
+
+@tool
+def retrieve_info(query: str) -> str:
+    """Retrieves personal information from MongoDB."""
+    # A simple retrieval based on a keyword match for this example
+    documents = personal_info_collection.find()
+    all_info = "\n".join([doc['info'] for doc in documents])
+    return all_info
+Use code with caution.
+
+Step 3: Implement LLM nodes and image generation
+This implementation uses the Ollama chat model and acknowledges the difficulty of local image generation. 
+python
+from langchain_community.chat_models import ChatOllama
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage
+from typing import TypedDict, Optional
+from langgraph.graph import StateGraph, END
+
+# Use a small Ollama model for orchestration and text generation
+llm = ChatOllama(model="phi3:mini")
+
+# SOP generation node using persistent info from MongoDB
+def generate_sop(state: dict):
+    job_description = state['job_description']
+    personal_info = retrieve_info.invoke("all personal information")
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are an SOP writer. Use the provided personal info to write a concise Statement of Purpose for the job description."),
+        ("human", f"Personal Information: {personal_info}\nJob Description: {job_description}\nStatement of Purpose:")
+    ])
+    
+    chain = prompt | llm
+    sop_text = chain.invoke({"personal_info": personal_info, "job_description": job_description})
+    state['output'] = sop_text.content
+    return state
+
+# Orchestrator node for task routing
+def orchestrator(state: dict):
+    task = state['task']
+    response = llm.invoke(f"Categorize the following task as 'sop' or 'image': {task}")
+    category = response.content.split()[-1].strip().lower().replace('.', '')
+    state['task_type'] = category
+    return state
+
+# Image generation node (local challenges)
+def generate_image(state: dict):
+    # This task will be very slow or fail on your hardware.
+    # We will provide a simple placeholder or suggest an external service.
+    print("Warning: Image generation is very slow or requires a more powerful GPU.")
+    print("Consider using a service like OpenAI's DALL-E or Midjourney for practical use.")
+    state['output'] = "Image generation was attempted but is not practical on this hardware."
+    return state
+Use code with caution.
+
+Step 4: Build and execute the LangGraph workflow
+Define the state: Define the state with all necessary fields.
+python
+class AgentState(TypedDict):
+    task: str
+    task_type: Optional[str]
+    job_description: Optional[str]
+    image_description: Optional[str]
+    output: Optional[str]
+Use code with caution.
+
+Define the graph and add nodes:
+python
+workflow = StateGraph(AgentState)
+workflow.add_node("orchestrator", orchestrator)
+workflow.add_node("sop_generator", generate_sop)
+workflow.add_node("image_generator", generate_image)
+Use code with caution.
+
+Define the routing logic:
+python
+def route_task(state: AgentState):
+    if state.get('task_type') == 'sop':
+        return "sop_generator"
+    elif state.get('task_type') == 'image':
+        return "image_generator"
+    else:
+        return "orchestrator"
+Use code with caution.
+
+Add edges and compile the graph:
+python
+workflow.set_entry_point("orchestrator")
+workflow.add_conditional_edges("orchestrator", route_task)
+workflow.add_edge("sop_generator", END)
+workflow.add_edge("image_generator", END)
+
+app = workflow.compile()
+Use code with caution.
+
+Run the agent locally:
+python
+# Example 1: SOP Generation (requires personal info to be present in DB)
+persist_info.invoke("My experience is in data science. I have a degree in Computer Science.")
+initial_state_sop = {
+    "task": "Create a statement of purpose for a data scientist position.",
+    "job_description": "We are seeking a skilled data scientist with experience in machine learning and data analysis."
+}
+result_sop = app.invoke(initial_state_sop)
+print("--- SOP Task Result ---")
+print(result_sop['output'])
+
+# Example 2: Image Generation
+initial_state_image = {
+    "task": "Generate a picture of a majestic lion.",
+    "image_description": "A majestic lion, with a golden mane, staring into the sunset, digital art."
+}
+result_image = app.invoke(initial_state_image)
+print("--- Image Task Result ---")
+print(result_image['output'])
+Use code with caution.
+
+Challenges and tradeoffs
+Model performance: While Phi-3-mini is highly capable for its size, it won't have the nuanced reasoning or creativity of larger models. Outputs should be more direct and less elaborate.
+Image generation: This remains a major challenge. The plan includes a simple placeholder, but the hardware is not suited for running a local diffusion model. A practical solution involves using an external API, which defeats the "local" purpose.
+Orchestration accuracy: The orchestration model's classification of tasks may be less reliable with a smaller LLM. The routing logic in this example is very simple and could be fooled by complex or ambiguous prompts.
+System responsiveness: Text generation will be slow, with the entire system becoming unresponsive during complex tasks due to heavy CPU usage.
+Local setup: Ensure both Ollama and MongoDB are running locally before starting the script. The PyMongo tool assumes a connection to a local server.

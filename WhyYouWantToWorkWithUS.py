@@ -2,82 +2,41 @@
 # LangGraph Agent Setup
 # Run: pip install -U langgraph "langchain[anthropic]"
 
+import getpass
 import os
-from langchain.chat_models import init_chat_model
-from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import InMemorySaver
+# Use a pipeline as a high-level helper
 
-def get_weather(city: str) -> str:
-    """Get weather for a given city."""
-    return f"It's always sunny in {city}!"
+from transformers import pipeline
 
-def main():
-    print("🌟 LangGraph Agent Demo")
-    print("=" * 40)
+
+pipe = pipeline("text-generation", model="google/gemma-3-270m")
+
+
+# Load model directly
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
+
+tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-270m")
+model = AutoModelForCausalLM.from_pretrained("google/gemma-3-270m")
+
+def generate_introduction(state):
+    # Your prompt engineering here
+    prompt = f"Write a brief creative introduction for a job application with eye catchy and fun word play. Job: {state['teacher']} Candidate: {state['rinky']}"
+    inputs = tokenizer(prompt, return_tensors="pt")
     
-    # Check for API key
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("⚠️  Setup required:")
-        print("1. Get API key: https://console.anthropic.com/settings/keys")
-        print("2. Set it: export ANTHROPIC_API_KEY='your-key-here'")
-        print("\n📝 Demo without API (showing tool functionality):")
-        print("User: what is the weather in sf")
-        print("Tool result:", get_weather("sf"))
-        return
+    with torch.no_grad():
+        outputs = model.generate(**inputs, max_new_tokens=256)
     
-    try:
-        # Configure the LLM with specific parameters
-        model = init_chat_model(
-            "anthropic:claude-3-5-sonnet-20241022",
-            temperature=0
-        )
-        
-        # Add memory for multi-turn conversations
-        checkpointer = InMemorySaver()
-        
-        # Create the agent with memory
-        agent = create_react_agent(
-            model=model,
-            tools=[get_weather],
-            prompt="You are a helpful assistant that can check weather information.",
-            checkpointer=checkpointer
-        )
-
-        # Configuration for conversation thread
-        config = {"configurable": {"thread_id": "1"}}
-        
-        print("🤖 Running LangGraph agent...")
-        
-        # First query
-        result1 = agent.invoke(
-            {"messages": [{"role": "user", "content": "what is the weather in sf"}]},
-            config
-        )
-        
-        print("✅ First response:")
-        for message in result1["messages"]:
-            if hasattr(message, 'type') and hasattr(message, 'content'):
-                print(f"   {message.type}: {message.content}")
-        
-        print("\n🔄 Testing memory with follow-up question...")
-        
-        # Follow-up query (tests memory)
-        result2 = agent.invoke(
-            {"messages": [{"role": "user", "content": "what about New York?"}]},
-            config
-        )
-        
-        print("✅ Follow-up response:")
-        for message in result2["messages"]:
-            if hasattr(message, 'type') and hasattr(message, 'content'):
-                print(f"   {message.type}: {message.content}")
-                
-    except ImportError as e:
-        print(f"❌ Missing dependencies: {e}")
-        print("Install with: pip install -U langgraph 'langchain[anthropic]'")
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    
+    return {"draft": generated_text}
 
 if __name__ == "__main__":
-    main()
+    # Example usage:
+    state = {
+        "teacher": "Software Engineer",
+        "rinky": "Rinky"
+    }
+    result = generate_introduction(state)
+    print(result['draft'])
+
